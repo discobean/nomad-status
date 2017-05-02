@@ -41,10 +41,9 @@ def get_instance_ips_from_asg(session, asg):
 
     return instance_ips
 
-def push_stats(asg, nomad, consul, quiet, region):
-    session = boto3.session.Session(region_name=region)
+def push_stats(session, asg, nomad, consul, quiet):
 
-    cloudwatch = boto3.client('cloudwatch', region_name=region)
+    cloudwatch = session.client('cloudwatch')
 
     instance_ips = get_instance_ips_from_asg(session, asg)
 
@@ -136,15 +135,37 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Show nomad agent allocation status')
 
     parser.add_argument('--quiet', required=False, default=False, action='store_true', help='No output')
-    parser.add_argument('--asg', required=True, help='AWS Autoscaling Group')
-    parser.add_argument('--region', required=True, help='AWS Region')
+    parser.add_argument('--asg', required=False, help='AWS Autoscaling Group')
+    parser.add_argument('--region', required=False, help='AWS Region')
     parser.add_argument('--nomad', required=False, default='http://localhost:4646', help='The URL of the nomad agent')
     parser.add_argument('--consul', required=False, default='http://localhost:8500', help='The URL of the nomad agent')
     args = parser.parse_args()
 
+    if not args.region:
+        document = requests.get('http://169.254.169.254/latest/dynamic/instance-identity/document').json()
+        args.region = document['region']
+
+    session = boto3.session.Session(region_name=args.region)
+
+    if not args.asg:
+        document = requests.get('http://169.254.169.254/latest/dynamic/instance-identity/document').json()
+        instance_id = document['instanceId']
+
+        # now get the ASG (aws:autoscaling:groupName) from the instance Tags
+        ec2 = session.resource('ec2')
+        instance = ec2.Instance(instance_id)
+
+        for tag in instance.tags:
+            if tag['Key'] == 'aws:autoscaling:groupName':
+                args.asg = tag['Value']
+
+    if not args.asg:
+        raise Exception("Failed to get aws:autoscaling:groupName tag from Instance, use --asg instead")
+
+
     while True:
         try:
-            push_stats(asg=args.asg, nomad=args.nomad, consul=args.consul, quiet=args.quiet, region=args.region)
+            push_stats(asg=args.asg, nomad=args.nomad, consul=args.consul, quiet=args.quiet, session=session)
             time.sleep(60)
         except KeyboardInterrupt:
             sys.exit()
