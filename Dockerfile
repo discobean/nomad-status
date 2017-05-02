@@ -6,6 +6,6 @@ RUN pip install -r requirements.txt
 COPY get_status.py .
 RUN chmod a+x get_status.py
 
-CMD /get_status.py
+ENTRYPOINT [ "./get_status.py" ]
 
 
