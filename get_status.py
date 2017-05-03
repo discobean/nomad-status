@@ -82,7 +82,7 @@ def push_stats(session, asg, nomad, consul, quiet):
         json = r.json()
 
         for x in json:
-            if x['ClientStatus'] != 'running' or x['Job']['Status'] != 'running':
+            if x['ClientStatus'] != 'running':
                 continue
 
             allocated_cpu += x['Resources']['CPU']
