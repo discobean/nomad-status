@@ -250,6 +250,7 @@ if __name__ == '__main__':
         instance_id = document['instanceId']
 
         # now get the ASG (aws:autoscaling:groupName) from the instance Tags
+        session = boto3.session.Session(region_name=args.region)
         ec2 = session.resource('ec2')
         instance = ec2.Instance(instance_id)
 
