@@ -8,18 +8,31 @@ import sys
 import traceback
 from bson import json_util
 import json
+import threading
 
-def put_metric(session, asg, name, value, unit):
-    cloudwatch = session.client('cloudwatch')
+class ASGNotFoundException(Exception):
+    pass
 
+def put_job_metric(cloudwatch, job_id, name, value, unit):
     response = cloudwatch.put_metric_data(
-    Namespace='Nomad/ASG',
-    MetricData=[{
-        'MetricName': name,
-        'Dimensions': [{ 'Name': 'AutoScalingGroupName', 'Value': asg }],
-        'Value': value,
-        'Unit': unit
-        }])
+        Namespace='Nomad/Job',
+        MetricData=[{
+            'MetricName': name,
+            'Dimensions': [{ 'Name': 'JobId', 'Value': job_id }],
+            'Value': value,
+            'Unit': unit
+            }])
+
+
+def put_asg_metric(cloudwatch, asg, name, value, unit):
+    response = cloudwatch.put_metric_data(
+        Namespace='Nomad/ASG',
+        MetricData=[{
+            'MetricName': name,
+            'Dimensions': [{ 'Name': 'AutoScalingGroupName', 'Value': asg }],
+            'Value': value,
+            'Unit': unit
+            }])
 
 def get_instance_ips_from_asg(session, asg):
     autoscaling = session.client('autoscaling')
@@ -31,8 +44,11 @@ def get_instance_ips_from_asg(session, asg):
     )
 
     instance_ids = []
-    for i in groups['AutoScalingGroups'][0]['Instances']:
-        instance_ids.append(i['InstanceId'])
+    try:
+        for i in groups['AutoScalingGroups'][0]['Instances']:
+            instance_ids.append(i['InstanceId'])
+    except IndexError:
+        raise ASGNotFoundException("No ASGs found with the name %s" % asg)
 
     instance_ips = []
     for instance_id in instance_ids:
@@ -41,8 +57,51 @@ def get_instance_ips_from_asg(session, asg):
 
     return instance_ips
 
-def push_stats(session, asg, nomad, consul, quiet):
+def push_job_stats(session, nomad, consul, quiet):
+    cloudwatch = session.client('cloudwatch')
 
+    # call nomad to find the list of jobs that exist
+    json = requests.get('%s/v1/jobs' % (nomad)).json()
+
+    for job in json:
+        total_percent_cpu = 0
+        total_allocations = 0
+
+        #print "Getting stats for Noamd Job ID: %s" % job['ID']
+        allocations = requests.get('%s/v1/job/%s/allocations' % (nomad, job['ID'])).json()
+
+        for allocation in allocations:
+            if allocation['ClientStatus'] != 'running':
+                continue
+
+            # Now find out which node IP address this allocation is running on
+            node = requests.get('%s/v1/node/%s' % (nomad, allocation['NodeID'])).json()
+            node_nomad_url = "http://%s" % node['HTTPAddr']
+
+            # Now get the CPU information about this allocation
+            # on the actual client
+            #print '%s/v1/client/allocation/%s/stats' % (node_nomad_url, allocation['ID'])
+            client_stats = requests.get('%s/v1/client/allocation/%s/stats' % (node_nomad_url, allocation['ID'])).json()
+
+            percent_cpu = client_stats['ResourceUsage']['CpuStats']['Percent']
+            total_percent_cpu += percent_cpu
+
+            total_allocations += 1
+
+        try:
+            summary_percent_cpu = int(total_percent_cpu / total_allocations)
+        except ZeroDivisionError:
+            summary_percent_cpu = 0
+
+        if not quiet:
+            print "Job %s %s%% CPU" % (job['ID'], summary_percent_cpu)
+
+        put_job_metric(cloudwatch, job['ID'], 'AverageCpuPercent', summary_percent_cpu, 'Percent')
+
+
+    pass
+
+def push_asg_stats(session, asg, nomad, consul, quiet):
     cloudwatch = session.client('cloudwatch')
 
     instance_ips = get_instance_ips_from_asg(session, asg)
@@ -50,10 +109,12 @@ def push_stats(session, asg, nomad, consul, quiet):
     total_cpu = 0
     total_memory = 0
     total_iops = 0
+    total_disk = 0
 
     total_allocated_cpu = 0
     total_allocated_memory = 0
     total_allocated_iops = 0
+    total_allocated_disk = 0
 
     # for each instance_ip get the stats by calling the nomad API against it
     for instance_ip in instance_ips:
@@ -68,14 +129,17 @@ def push_stats(session, asg, nomad, consul, quiet):
         resources_cpu = json['Resources']['CPU']
         resources_memory = json['Resources']['MemoryMB']
         resources_iops = json['Resources']['IOPS']
+        resources_disk = json['Resources']['DiskMB']
 
         total_cpu += resources_cpu
         total_memory += resources_memory
         total_iops += resources_iops
+        total_disk += resources_disk
 
         allocated_cpu = 0
         allocated_memory = 0
         allocated_iops = 0
+        allocated_disk = 0
 
         r = requests.get('%s/v1/node/%s/allocations' % (node_nomad_url, node_id))
         # print '%s/v1/node/%s/allocations' % (node_nomad_url, node_id)
@@ -88,22 +152,26 @@ def push_stats(session, asg, nomad, consul, quiet):
             allocated_cpu += x['Resources']['CPU']
             allocated_memory += x['Resources']['MemoryMB']
             allocated_iops += x['Resources']['IOPS']
+            allocated_disk += x['Resources']['DiskMB']
 
         if not quiet:
-            print "%s: %s/%s CPU, %s/%s MemoryMB, %s/%s IOPS" % (node_name,
+            print "%s: %s/%s CPU, %s/%s MemoryMB, %s/%s IOPS, %s/%s DiskMB" % (node_name,
                 allocated_cpu, resources_cpu,
                 allocated_memory, resources_memory,
-                allocated_iops, resources_iops)
+                allocated_iops, resources_iops,
+                allocated_disk, resources_disk)
 
         total_allocated_cpu += allocated_cpu
         total_allocated_memory += allocated_memory
         total_allocated_iops += allocated_iops
+        total_allocated_disk += allocated_disk
 
     if not quiet:
-        print "Total: %s/%s CPU, %s/%s MemoryMB, %s/%s IOPS" % (
+        print "Total: %s/%s CPU, %s/%s MemoryMB, %s/%s IOPS, %s/%s DiskMB" % (
             total_allocated_cpu, total_cpu,
             total_allocated_memory, total_memory,
-            total_allocated_iops, total_iops)
+            total_allocated_iops, total_iops,
+            total_allocated_disk, total_disk)
 
     try:
         percent_cpu = int(total_allocated_cpu / total_cpu * 100)
@@ -120,16 +188,48 @@ def push_stats(session, asg, nomad, consul, quiet):
     except ZeroDivisionError:
         percent_iops = 0
 
+    try:
+        percent_disk = int(total_allocated_disk / total_disk * 100)
+    except ZeroDivisionError:
+        percent_disk = 0
+
     if not quiet:
-        print "Total: %s%% CPU, %s%% MemoryMB, %s%% IOPS" % (
+        print "Total: %s%% CPU, %s%% MemoryMB, %s%% IOPS, %s%% Disk" % (
             percent_cpu,
             percent_memory,
-            percent_iops)
+            percent_iops,
+            percent_disk)
         print "-"*30
 
-    put_metric(session, asg, 'CPUUtilization', percent_cpu, 'Percent')
-    put_metric(session, asg, 'MemoryUtilization', percent_memory, 'Percent')
-    put_metric(session, asg, 'IOPSUtilization', percent_iops, 'Percent')
+    put_asg_metric(cloudwatch, asg, 'CPUUtilization', percent_cpu, 'Percent')
+    put_asg_metric(cloudwatch, asg, 'MemoryUtilization', percent_memory, 'Percent')
+    put_asg_metric(cloudwatch, asg, 'IOPSUtilization', percent_iops, 'Percent')
+    put_asg_metric(cloudwatch, asg, 'DiskUtilization', percent_disk, 'Percent')
+
+def fetch_job_stats(thread_name, nomad, consul, quiet, region):
+    session = boto3.session.Session(region_name=region)
+
+    while True:
+        try:
+            push_job_stats(nomad=args.nomad, consul=args.consul, quiet=args.quiet, session=session)
+            time.sleep(60)
+        except:
+            traceback.print_exc(file=sys.stdout)
+            time.sleep(1)
+
+def fetch_asg_stats(thread_name, asg, nomad, consul, quiet, region):
+    session = boto3.session.Session(region_name=region)
+
+    while True:
+        try:
+            push_asg_stats(asg=args.asg, nomad=args.nomad, consul=args.consul, quiet=args.quiet, session=session)
+            time.sleep(60)
+        except ASGNotFoundException:
+            traceback.print_exc(file=sys.stdout)
+            time.sleep(30)
+        except:
+            traceback.print_exc(file=sys.stdout)
+            time.sleep(1)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Show nomad agent allocation status')
@@ -144,8 +244,6 @@ if __name__ == '__main__':
     if not args.region:
         document = requests.get('http://169.254.169.254/latest/dynamic/instance-identity/document').json()
         args.region = document['region']
-
-    session = boto3.session.Session(region_name=args.region)
 
     if not args.asg:
         document = requests.get('http://169.254.169.254/latest/dynamic/instance-identity/document').json()
@@ -162,13 +260,23 @@ if __name__ == '__main__':
     if not args.asg:
         raise Exception("Failed to get aws:autoscaling:groupName tag from Instance, use --asg instead")
 
+    threads = []
 
-    while True:
+    # This thread fetches the ASG stats and pushes them to AWS Cloudwatch
+    t1 = threading.Thread(target=fetch_asg_stats, args=("fetch_asg_stats", args.asg, args.nomad, args.consul, args.quiet, args.region, ))
+    t1.daemon = True
+    t1.start()
+    threads.append(t1)
+
+    # This thread fetches the statistics of the CPU used percentage as an average
+    # for the running jobs in the cluster
+    t2 = threading.Thread(target=fetch_job_stats, args=("fetch_job_stats", args.nomad, args.consul, args.quiet, args.region, ))
+    t2.daemon = True
+    t2.start()
+    threads.append(t2)
+
+    while threading.active_count() > 0:
         try:
-            push_stats(asg=args.asg, nomad=args.nomad, consul=args.consul, quiet=args.quiet, session=session)
-            time.sleep(60)
-        except KeyboardInterrupt:
+            time.sleep(0.1)
+        except (KeyboardInterrupt, SystemExit):
             sys.exit()
-        except:
-            traceback.print_exc(file=sys.stdout)
-            time.sleep(1)
