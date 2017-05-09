@@ -10,6 +10,8 @@ from bson import json_util
 import json
 import threading
 
+sleep_between_jobs = 60
+
 class ASGNotFoundException(Exception):
     pass
 
@@ -78,15 +80,17 @@ def push_job_stats(session, nomad, consul, quiet):
             node = requests.get('%s/v1/node/%s' % (nomad, allocation['NodeID'])).json()
             node_nomad_url = "http://%s" % node['HTTPAddr']
 
-            # Now get the CPU information about this allocation
-            # on the actual client
-            #print '%s/v1/client/allocation/%s/stats' % (node_nomad_url, allocation['ID'])
-            client_stats = requests.get('%s/v1/client/allocation/%s/stats' % (node_nomad_url, allocation['ID'])).json()
+            # perform 3 requests in order to get a good sample size
+            for i in range(3):
+                # Now get the CPU information about this allocation
+                # on the actual client
+                #print '%s/v1/client/allocation/%s/stats' % (node_nomad_url, allocation['ID'])
+                client_stats = requests.get('%s/v1/client/allocation/%s/stats' % (node_nomad_url, allocation['ID'])).json()
 
-            percent_cpu = client_stats['ResourceUsage']['CpuStats']['Percent']
-            total_percent_cpu += percent_cpu
-
-            total_allocations += 1
+                percent_cpu = client_stats['ResourceUsage']['CpuStats']['Percent']
+                total_percent_cpu += percent_cpu
+                total_allocations += 1
+                time.sleep(0.2)
 
         try:
             summary_percent_cpu = int(total_percent_cpu / total_allocations)
@@ -201,8 +205,8 @@ def push_asg_stats(session, asg, nomad, consul, quiet):
             percent_disk)
         print "-"*30
 
-    put_asg_metric(cloudwatch, asg, 'CPUUtilization', percent_cpu, 'Percent')
     put_asg_metric(cloudwatch, asg, 'MemoryUtilization', percent_memory, 'Percent')
+    put_asg_metric(cloudwatch, asg, 'CPUUtilization', percent_cpu, 'Percent')
     put_asg_metric(cloudwatch, asg, 'IOPSUtilization', percent_iops, 'Percent')
     put_asg_metric(cloudwatch, asg, 'DiskUtilization', percent_disk, 'Percent')
 
@@ -212,7 +216,7 @@ def fetch_job_stats(thread_name, nomad, consul, quiet, region):
     while True:
         try:
             push_job_stats(nomad=args.nomad, consul=args.consul, quiet=args.quiet, session=session)
-            time.sleep(60)
+            time.sleep(sleep_between_jobs)
         except:
             traceback.print_exc(file=sys.stdout)
             time.sleep(1)
@@ -223,10 +227,10 @@ def fetch_asg_stats(thread_name, asg, nomad, consul, quiet, region):
     while True:
         try:
             push_asg_stats(asg=args.asg, nomad=args.nomad, consul=args.consul, quiet=args.quiet, session=session)
-            time.sleep(60)
+            time.sleep(sleep_between_jobs)
         except ASGNotFoundException:
             traceback.print_exc(file=sys.stdout)
-            time.sleep(30)
+            time.sleep(sleep_between_jobs/2)
         except:
             traceback.print_exc(file=sys.stdout)
             time.sleep(1)
