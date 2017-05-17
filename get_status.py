@@ -235,6 +235,37 @@ def fetch_asg_stats(thread_name, asg, nomad, consul, quiet, region):
             traceback.print_exc(file=sys.stdout)
             time.sleep(1)
 
+def watch_instance_termination(thread_name, topic, asg, region):
+    instance_id = requests.get('http://169.254.169.254/latest/meta-data/instance-id').text
+
+    session = boto3.session.Session(region_name=region)
+    account_id = session.client('sts').get_caller_identity().get('Account')
+    sns = session.client('sns')
+
+    topic_arn = "arn:aws:sns:%s:%s:%s" % (region, account_id, topic)
+
+    # keep checking until we get a spot termination time
+    while requests.get("http://169.254.169.254/latest/meta-data/spot/termination-time").status_code != 200:
+        time.sleep(5)
+
+    print "Spot termination notice received"
+
+    # if the spot will be terminated, then send an autoscaling:EC2_INSTANCE_TERMINATING message
+    # to an SNS topic, thus cleaning up this instance if necessary
+    message = {
+        "AccountId": account_id,
+        "LifecycleTransition": "autoscaling:EC2_INSTANCE_TERMINATING",
+        "AutoScalingGroupName": asg,
+        "Service": "AWS Auto Scaling",
+        "EC2InstanceId": instance_id
+    }
+
+    print "Sending SNS message to topic %s: %s" % (topic, message)
+    sns.publish(
+        TopicArn=topic,
+        Message=json.dumps(message)
+    )
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Show nomad agent allocation status')
 
@@ -243,6 +274,7 @@ if __name__ == '__main__':
     parser.add_argument('--region', required=False, help='AWS Region')
     parser.add_argument('--nomad', required=False, default='http://localhost:4646', help='The URL of the nomad agent')
     parser.add_argument('--consul', required=False, default='http://localhost:8500', help='The URL of the nomad agent')
+    parser.add_argument('--snstopic', required=False, help='Will send a autoscaling termination event to this topic')
     args = parser.parse_args()
 
     if not args.region:
@@ -279,6 +311,14 @@ if __name__ == '__main__':
     t2.daemon = True
     t2.start()
     threads.append(t2)
+
+    if args.snstopic:
+        # This thread checks for spot instance termination, and if terminated sends an SNS message
+        # to this queue, as if it were sent by an AWS Autoscaling termination hook
+        t3 = threading.Thread(target=watch_instance_termination, args=("watch_instance_termination", args.snstopic, args.asg, args.region, ))
+        t3.daemon = True
+        t3.start()
+        threads.append(t3)
 
     while threading.active_count() > 0:
         try:
