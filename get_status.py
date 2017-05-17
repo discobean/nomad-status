@@ -235,14 +235,12 @@ def fetch_asg_stats(thread_name, asg, nomad, consul, quiet, region):
             traceback.print_exc(file=sys.stdout)
             time.sleep(1)
 
-def watch_instance_termination(thread_name, topic, asg, region):
+def watch_instance_termination(thread_name, topic_arn, asg, region):
     instance_id = requests.get('http://169.254.169.254/latest/meta-data/instance-id').text
 
     session = boto3.session.Session(region_name=region)
     account_id = session.client('sts').get_caller_identity().get('Account')
     sns = session.client('sns')
-
-    topic_arn = "arn:aws:sns:%s:%s:%s" % (region, account_id, topic)
 
     # keep checking until we get a spot termination time
     while requests.get("http://169.254.169.254/latest/meta-data/spot/termination-time").status_code != 200:
@@ -251,7 +249,7 @@ def watch_instance_termination(thread_name, topic, asg, region):
     print "Spot termination notice received"
 
     # if the spot will be terminated, then send an autoscaling:EC2_INSTANCE_TERMINATING message
-    # to an SNS topic, thus cleaning up this instance if necessary
+    # to an SNS topic_arn, thus cleaning up this instance if necessary
     message = {
         "AccountId": account_id,
         "LifecycleTransition": "autoscaling:EC2_INSTANCE_TERMINATING",
@@ -260,9 +258,9 @@ def watch_instance_termination(thread_name, topic, asg, region):
         "EC2InstanceId": instance_id
     }
 
-    print "Sending SNS message to topic %s: %s" % (topic, message)
+    print "Sending SNS message to topic_arn %s: %s" % (topic_arn, message)
     sns.publish(
-        TopicArn=topic,
+        TopicArn=topic_arn,
         Message=json.dumps(message)
     )
 
