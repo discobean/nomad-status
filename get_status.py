@@ -225,7 +225,7 @@ def push_asg_stats(session, asg, nomad, consul, quiet):
             percent_disk)
         print "-"*30
 
-    put_asg_metric(cloudwatch, asg, 'ResourceUtilization', percent_memory, 'Percent')
+    put_asg_metric(cloudwatch, asg, 'ResourceUtilization', percent_resource, 'Percent')
     put_asg_metric(cloudwatch, asg, 'MemoryUtilization', percent_memory, 'Percent')
     put_asg_metric(cloudwatch, asg, 'CPUUtilization', percent_cpu, 'Percent')
     put_asg_metric(cloudwatch, asg, 'IOPSUtilization', percent_iops, 'Percent')
