@@ -213,6 +213,9 @@ def push_asg_stats(session, asg, nomad, consul, quiet):
     except ZeroDivisionError:
         percent_disk = 0
 
+    if percent_disk > percent_resource:
+        percent_resource = percent_disk
+
     if not quiet:
         print "Total consumed by jobs: %s%% Resource, %s%% CPU, %s%% MemoryMB, %s%% IOPS, %s%% Disk" % (
             percent_resource,
