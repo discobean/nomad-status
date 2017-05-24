@@ -15,9 +15,9 @@ sleep_between_jobs = 60
 class ASGNotFoundException(Exception):
     pass
 
-def put_job_metric(cloudwatch, job_id, name, value, unit):
+def put_job_metric(cloudwatch, stack_name, job_id, name, value, unit):
     response = cloudwatch.put_metric_data(
-        Namespace='Nomad/Job',
+        Namespace='Nomad/%s' % stack_name,
         MetricData=[{
             'MetricName': name,
             'Dimensions': [{ 'Name': 'JobId', 'Value': job_id }],
@@ -26,9 +26,9 @@ def put_job_metric(cloudwatch, job_id, name, value, unit):
             }])
 
 
-def put_asg_metric(cloudwatch, asg, name, value, unit):
+def put_asg_metric(cloudwatch, asg, stack_name, name, value, unit):
     response = cloudwatch.put_metric_data(
-        Namespace='Nomad/ASG',
+        Namespace='Nomad/%s' % stack_name,
         MetricData=[{
             'MetricName': name,
             'Dimensions': [{ 'Name': 'AutoScalingGroupName', 'Value': asg }],
@@ -59,7 +59,7 @@ def get_instance_ips_from_asg(session, asg):
 
     return instance_ips
 
-def push_job_stats(session, nomad, consul, quiet):
+def push_job_stats(session, stack_name, nomad, consul, quiet):
     cloudwatch = session.client('cloudwatch')
 
     # call nomad to find the list of jobs that exist
@@ -100,12 +100,12 @@ def push_job_stats(session, nomad, consul, quiet):
         if not quiet:
             print "Job %s %s%% CPU" % (job['ID'], summary_percent_cpu)
 
-        put_job_metric(cloudwatch, job['ID'], 'AverageCpuPercent', summary_percent_cpu, 'Percent')
+        put_job_metric(cloudwatch, stack_name, job['ID'], 'AverageCpuPercent', summary_percent_cpu, 'Percent')
 
 
     pass
 
-def push_asg_stats(session, asg, nomad, consul, quiet):
+def push_asg_stats(session, asg, stack_name, nomad, consul, quiet):
     cloudwatch = session.client('cloudwatch')
 
     instance_ips = get_instance_ips_from_asg(session, asg)
@@ -225,29 +225,29 @@ def push_asg_stats(session, asg, nomad, consul, quiet):
             percent_disk)
         print "-"*30
 
-    put_asg_metric(cloudwatch, asg, 'ResourceUtilization', percent_resource, 'Percent')
-    put_asg_metric(cloudwatch, asg, 'MemoryUtilization', percent_memory, 'Percent')
-    put_asg_metric(cloudwatch, asg, 'CPUUtilization', percent_cpu, 'Percent')
-    put_asg_metric(cloudwatch, asg, 'IOPSUtilization', percent_iops, 'Percent')
-    put_asg_metric(cloudwatch, asg, 'DiskUtilization', percent_disk, 'Percent')
+    put_asg_metric(cloudwatch, asg, stack_name, 'ResourceUtilization', percent_resource, 'Percent')
+    put_asg_metric(cloudwatch, asg, stack_name, 'MemoryUtilization', percent_memory, 'Percent')
+    put_asg_metric(cloudwatch, asg, stack_name, 'CPUUtilization', percent_cpu, 'Percent')
+    put_asg_metric(cloudwatch, asg, stack_name, 'IOPSUtilization', percent_iops, 'Percent')
+    put_asg_metric(cloudwatch, asg, stack_name, 'DiskUtilization', percent_disk, 'Percent')
 
-def fetch_job_stats(thread_name, nomad, consul, quiet, region):
+def fetch_job_stats(thread_name, stack_name, nomad, consul, quiet, region):
     session = boto3.session.Session(region_name=region)
 
     while True:
         try:
-            push_job_stats(nomad=args.nomad, consul=args.consul, quiet=args.quiet, session=session)
+            push_job_stats(stack_name=stack_name, nomad=nomad, consul=consul, quiet=quiet, session=session)
             time.sleep(sleep_between_jobs)
         except:
             traceback.print_exc(file=sys.stdout)
             time.sleep(1)
 
-def fetch_asg_stats(thread_name, asg, nomad, consul, quiet, region):
+def fetch_asg_stats(thread_name, asg, stack_name, nomad, consul, quiet, region):
     session = boto3.session.Session(region_name=region)
 
     while True:
         try:
-            push_asg_stats(asg=args.asg, nomad=args.nomad, consul=args.consul, quiet=args.quiet, session=session)
+            push_asg_stats(asg=asg, stack_name=stack_name, nomad=nomad, consul=consul, quiet=quiet, session=session)
             time.sleep(sleep_between_jobs)
         except ASGNotFoundException:
             traceback.print_exc(file=sys.stdout)
@@ -297,6 +297,7 @@ if __name__ == '__main__':
 
     parser.add_argument('--quiet', required=False, default=False, action='store_true', help='No output')
     parser.add_argument('--asg', required=False, help='AWS Autoscaling Group')
+    parser.add_argument('--stack_name', required=False, help='The AWS stack name')
     parser.add_argument('--region', required=False, help='AWS Region')
     parser.add_argument('--nomad', required=False, default='http://localhost:4646', help='The URL of the nomad agent')
     parser.add_argument('--consul', required=False, default='http://localhost:8500', help='The URL of the nomad agent')
@@ -324,14 +325,30 @@ if __name__ == '__main__':
             if tag['Key'] == 'aws:autoscaling:groupName':
                 args.asg = tag['Value']
 
+    if not args.stack_name:
+        document = requests.get('http://169.254.169.254/latest/dynamic/instance-identity/document', timeout=10).json()
+        instance_id = document['instanceId']
+
+        # now get the ASG (aws:autoscaling:groupName) from the instance Tags
+        session = boto3.session.Session(region_name=args.region)
+        ec2 = session.resource('ec2')
+        instance = ec2.Instance(instance_id)
+
+        for tag in instance.tags:
+            if tag['Key'] == 'aws:cloudformation:stack-name':
+                args.stack_name = tag['Value']
+
     if not args.asg:
         raise Exception("Failed to get aws:autoscaling:groupName tag from Instance, use --asg instead")
+
+    if not args.stack_name:
+        raise Exception("Failed to get aws:cloudformation:stack-name tag from Instance, use --stack_name instead")
 
     threads = []
 
     if not args.noasgstats:
         # This thread fetches the ASG stats and pushes them to AWS Cloudwatch
-        t1 = threading.Thread(target=fetch_asg_stats, args=("fetch_asg_stats", args.asg, args.nomad, args.consul, args.quiet, args.region, ))
+        t1 = threading.Thread(target=fetch_asg_stats, args=("fetch_asg_stats", args.asg, args.stack_name, args.nomad, args.consul, args.quiet, args.region, ))
         t1.daemon = True
         t1.start()
         threads.append(t1)
@@ -339,7 +356,7 @@ if __name__ == '__main__':
     if not args.nojobstats:
         # This thread fetches the statistics of the CPU used percentage as an average
         # for the running jobs in the cluster
-        t2 = threading.Thread(target=fetch_job_stats, args=("fetch_job_stats", args.nomad, args.consul, args.quiet, args.region, ))
+        t2 = threading.Thread(target=fetch_job_stats, args=("fetch_job_stats", args.stack_name, args.nomad, args.consul, args.quiet, args.region, ))
         t2.daemon = True
         t2.start()
         threads.append(t2)
