@@ -15,9 +15,33 @@ sleep_between_jobs = 60
 class ASGNotFoundException(Exception):
     pass
 
-def put_job_metric(cloudwatch, stack_name, job_id, name, value, unit):
+
+def get_cf_outputs(session, stack_name):
+    # Get all the outputs for the stack
+    cloudformation = session.client('cloudformation')
+    response = cloudformation.describe_stacks(StackName=stack_name)
+    outputs = {}
+    for output in response['Stacks'][0]['Outputs']:
+        outputs[output['OutputKey']] = output['OutputValue']
+
+    return outputs
+
+
+def put_job_metric(cloudwatch, stack_name, server_stack, job_id, name, value, unit):
+    # Jobs are recorded under the ASG stack name, and also under the server stack name
+    # The are required under the serer_stack name because the autoscaling task happens against
+    #   the cloudformation metrics from the server_stack namespace
     response = cloudwatch.put_metric_data(
         Namespace='Nomad/%s' % stack_name,
+        MetricData=[{
+            'MetricName': name,
+            'Dimensions': [{ 'Name': 'JobId', 'Value': job_id }],
+            'Value': value,
+            'Unit': unit
+            }])
+
+    response = cloudwatch.put_metric_data(
+        Namespace='Nomad/%s' % server_stack,
         MetricData=[{
             'MetricName': name,
             'Dimensions': [{ 'Name': 'JobId', 'Value': job_id }],
@@ -61,6 +85,10 @@ def get_instance_ips_from_asg(session, asg):
 
 def push_job_stats(session, stack_name, nomad, consul, quiet):
     cloudwatch = session.client('cloudwatch')
+    outputs = get_cf_outputs(session, stack_name)
+
+    # Job statistics are recorded under the server stack also
+    server_stack = outputs['ServerStack']
 
     # call nomad to find the list of jobs that exist
     json = requests.get('%s/v1/jobs' % (nomad), timeout=10).json()
@@ -100,7 +128,7 @@ def push_job_stats(session, stack_name, nomad, consul, quiet):
         if not quiet:
             print "Job %s %s%% CPU" % (job['ID'], summary_percent_cpu)
 
-        put_job_metric(cloudwatch, stack_name, job['ID'], 'AverageCpuPercent', summary_percent_cpu, 'Percent')
+        put_job_metric(cloudwatch, stack_name, server_stack, job['ID'], 'AverageCpuPercent', summary_percent_cpu, 'Percent')
 
 
     pass
