@@ -93,6 +93,7 @@ def push_job_stats(session, stack_name, nomad, consul, quiet):
     # call nomad to find the list of jobs that exist
     json = requests.get('%s/v1/jobs' % (nomad), timeout=10).json()
 
+    # TODO, this should run in its own thread for each job
     for job in json:
         total_percent_cpu = 0
         total_allocations = 0
@@ -100,6 +101,7 @@ def push_job_stats(session, stack_name, nomad, consul, quiet):
         #print "Getting stats for Noamd Job ID: %s" % job['ID']
         allocations = requests.get('%s/v1/job/%s/allocations' % (nomad, job['ID']), timeout=10).json()
 
+        # TODO, this should run in its own thread for each allocation
         for allocation in allocations:
             if allocation['ClientStatus'] != 'running':
                 continue
@@ -122,15 +124,15 @@ def push_job_stats(session, stack_name, nomad, consul, quiet):
                 total_allocations += 1
                 time.sleep(0.2)
 
-        try:
-            summary_percent_cpu = int(total_percent_cpu / total_allocations)
-        except ZeroDivisionError:
-            summary_percent_cpu = 0
+            try:
+                summary_percent_cpu = int(total_percent_cpu / total_allocations)
+            except ZeroDivisionError:
+                summary_percent_cpu = 0
 
-        if not quiet:
-            print "Job %s %s%% CPU" % (job['ID'], summary_percent_cpu)
+            if not quiet:
+                print "Job %s::%s %s%% CPU" % (job['ID'], task_name, summary_percent_cpu)
 
-        put_job_metric(cloudwatch, stack_name, server_stack, job['ID'], task_name, 'AverageCpuPercent', summary_percent_cpu, 'Percent')
+            put_job_metric(cloudwatch, stack_name, server_stack, job['ID'], task_name, 'AverageCpuPercent', summary_percent_cpu, 'Percent')
 
 
     pass
