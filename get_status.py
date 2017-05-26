@@ -27,7 +27,7 @@ def get_cf_outputs(session, stack_name):
     return outputs
 
 
-def put_job_metric(cloudwatch, stack_name, server_stack, job_id, name, value, unit):
+def put_job_metric(cloudwatch, stack_name, server_stack, job_id, task_name, name, value, unit):
     # Jobs are recorded under the ASG stack name, and also under the server stack name
     # The are required under the serer_stack name because the autoscaling task happens against
     #   the cloudformation metrics from the server_stack namespace
@@ -35,7 +35,7 @@ def put_job_metric(cloudwatch, stack_name, server_stack, job_id, name, value, un
         Namespace='Nomad/%s' % stack_name,
         MetricData=[{
             'MetricName': name,
-            'Dimensions': [{ 'Name': 'JobId', 'Value': job_id }],
+            'Dimensions': [{ 'Name': 'Job', 'Value': "%s::%s" % (job_id, task_name) }],
             'Value': value,
             'Unit': unit
             }])
@@ -44,7 +44,7 @@ def put_job_metric(cloudwatch, stack_name, server_stack, job_id, name, value, un
         Namespace='Nomad/%s' % server_stack,
         MetricData=[{
             'MetricName': name,
-            'Dimensions': [{ 'Name': 'JobId', 'Value': job_id }],
+            'Dimensions': [{ 'Name': 'Job', 'Value': "%s::%s" % (job_id, task_name) }],
             'Value': value,
             'Unit': unit
             }])
@@ -104,6 +104,8 @@ def push_job_stats(session, stack_name, nomad, consul, quiet):
             if allocation['ClientStatus'] != 'running':
                 continue
 
+            task_name = allocation['TaskGroup']
+
             # Now find out which node IP address this allocation is running on
             node = requests.get('%s/v1/node/%s' % (nomad, allocation['NodeID']), timeout=10).json()
             node_nomad_url = "http://%s" % node['HTTPAddr']
@@ -128,7 +130,7 @@ def push_job_stats(session, stack_name, nomad, consul, quiet):
         if not quiet:
             print "Job %s %s%% CPU" % (job['ID'], summary_percent_cpu)
 
-        put_job_metric(cloudwatch, stack_name, server_stack, job['ID'], 'AverageCpuPercent', summary_percent_cpu, 'Percent')
+        put_job_metric(cloudwatch, stack_name, server_stack, job['ID'], task_name, 'AverageCpuPercent', summary_percent_cpu, 'Percent')
 
 
     pass
