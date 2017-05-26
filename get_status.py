@@ -27,21 +27,12 @@ def get_cf_outputs(session, stack_name):
     return outputs
 
 
-def put_job_metric(cloudwatch, stack_name, server_stack, job_id, task_name, name, value, unit):
+def put_job_metric(cloudwatch, stack_name, job_id, task_name, name, value, unit):
     # Jobs are recorded under the ASG stack name, and also under the server stack name
     # The are required under the serer_stack name because the autoscaling task happens against
     #   the cloudformation metrics from the server_stack namespace
     response = cloudwatch.put_metric_data(
         Namespace='Nomad/%s' % stack_name,
-        MetricData=[{
-            'MetricName': name,
-            'Dimensions': [{ 'Name': 'Job', 'Value': "%s::%s" % (job_id, task_name) }],
-            'Value': value,
-            'Unit': unit
-            }])
-
-    response = cloudwatch.put_metric_data(
-        Namespace='Nomad/%s' % server_stack,
         MetricData=[{
             'MetricName': name,
             'Dimensions': [{ 'Name': 'Job', 'Value': "%s::%s" % (job_id, task_name) }],
@@ -118,7 +109,7 @@ def push_job_stats(session, stack_name, nomad, consul, quiet):
 
                 percent_cpu = client_stats['ResourceUsage']['CpuStats']['Percent']
 
-                put_job_metric(cloudwatch, stack_name, server_stack, job['ID'], task_name, 'AverageCpuPercent', percent_cpu, 'Percent')
+                put_job_metric(cloudwatch, stack_name, job['ID'], task_name, 'AverageCpuPercent', percent_cpu, 'Percent')
                 print "Job(%s-%d) %s::%s %s%% CPU" % (allocation['ID'], i, job['ID'], task_name, percent_cpu)
                 time.sleep(0.2)
 
