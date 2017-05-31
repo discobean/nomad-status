@@ -15,6 +15,15 @@ sleep_between_jobs = 60
 class ASGNotFoundException(Exception):
     pass
 
+instances = {}
+def get_instance(ec2, instance_id):
+    try:
+        return instances[instance_id]
+    except KeyError:
+        print "Getting instance %s" % instance_id
+        instances[instance_id] = ec2.Instance(instance_id)
+        return instances[instance_id]
+
 
 def get_cf_outputs(session, stack_name):
     # Get all the outputs for the stack
@@ -69,7 +78,8 @@ def get_instance_ips_from_asg(session, asg):
 
     instance_ips = []
     for instance_id in instance_ids:
-        instance = ec2.Instance(instance_id)
+        instance = get_instance(ec2, instance_id)
+        #instance = ec2.Instance(instance_id)
         instance_ips.append(instance.private_ip_address)
 
     return instance_ips
@@ -246,10 +256,10 @@ def fetch_job_stats(thread_name, stack_name, nomad, consul, quiet, region):
     while True:
         try:
             push_job_stats(stack_name=stack_name, nomad=nomad, consul=consul, quiet=quiet, session=session)
-            time.sleep(sleep_between_jobs)
         except:
             traceback.print_exc(file=sys.stdout)
-            time.sleep(1)
+
+        time.sleep(sleep_between_jobs)
 
 def fetch_asg_stats(thread_name, asg, stack_name, nomad, consul, quiet, region):
     session = boto3.session.Session(region_name=region)
@@ -257,13 +267,13 @@ def fetch_asg_stats(thread_name, asg, stack_name, nomad, consul, quiet, region):
     while True:
         try:
             push_asg_stats(asg=asg, stack_name=stack_name, nomad=nomad, consul=consul, quiet=quiet, session=session)
-            time.sleep(sleep_between_jobs)
         except ASGNotFoundException:
             traceback.print_exc(file=sys.stdout)
             time.sleep(sleep_between_jobs/2)
         except:
             traceback.print_exc(file=sys.stdout)
-            time.sleep(1)
+
+        time.sleep(sleep_between_jobs)
 
 def watch_instance_termination(thread_name, topic_arn, asg, region):
     while True:
@@ -328,7 +338,8 @@ if __name__ == '__main__':
         # now get the ASG (aws:autoscaling:groupName) from the instance Tags
         session = boto3.session.Session(region_name=args.region)
         ec2 = session.resource('ec2')
-        instance = ec2.Instance(instance_id)
+        instance = get_instance(ec2, instance_id)
+        #instance = ec2.Instance(instance_id)
 
         for tag in instance.tags:
             if tag['Key'] == 'aws:autoscaling:groupName':
@@ -341,7 +352,8 @@ if __name__ == '__main__':
         # now get the ASG (aws:autoscaling:groupName) from the instance Tags
         session = boto3.session.Session(region_name=args.region)
         ec2 = session.resource('ec2')
-        instance = ec2.Instance(instance_id)
+        instance = get_instance(ec2, instance_id)
+        #instance = ec2.Instance(instance_id)
 
         for tag in instance.tags:
             if tag['Key'] == 'aws:cloudformation:stack-name':
