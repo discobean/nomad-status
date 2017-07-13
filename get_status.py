@@ -60,6 +60,8 @@ def put_asg_metric(cloudwatch, asg, stack_name, name, value, unit):
             'Unit': unit
             }])
 
+    print "Pushed metric Nomad/%s AutoScalingGroupName:%s" % (stack_name, asg)
+
 def get_instance_ips_from_asg(session, asg):
     autoscaling = session.client('autoscaling')
     ec2 = session.resource('ec2')
@@ -92,7 +94,11 @@ def push_job_stats(session, stack_name, nomad, consul, quiet):
     server_stack = outputs['ServerStack']
 
     # call nomad to find the list of jobs that exist
-    json = requests.get('%s/v1/jobs' % (nomad), timeout=10).json()
+    try:
+        json = requests.get('%s/v1/jobs' % (nomad), timeout=10).json()
+    except ValueError:
+        print "Invalid JSON Resposne from nomad server (Could not push_job_stats())"
+        return False
 
     # TODO, this should run in its own thread for each job
     for job in json:
@@ -125,6 +131,7 @@ def push_job_stats(session, stack_name, nomad, consul, quiet):
 
 
 def push_asg_stats(session, asg, stack_name, nomad, consul, quiet):
+    print "push_asg_stats(session, %s, %s, %s, %s, quiet)" % (asg, stack_name, nomad, consul)
     cloudwatch = session.client('cloudwatch')
 
     instance_ips = get_instance_ips_from_asg(session, asg)
@@ -146,7 +153,11 @@ def push_asg_stats(session, asg, stack_name, nomad, consul, quiet):
         json = requests.get('%s/v1/agent/self' % (node_nomad_url), timeout=10).json()
         node_id = json['stats']['client']['node_id']
 
-        json = requests.get('%s/v1/node/%s' % (node_nomad_url, node_id), timeout=10).json()
+        try:
+            json = requests.get('%s/v1/node/%s' % (node_nomad_url, node_id), timeout=10).json()
+        except ValueError:
+            print "Could not get stats for node_id %s, skipping it" % node_id
+            continue
 
         node_name = json['Name']
         resources_cpu = json['Resources']['CPU']
@@ -165,7 +176,11 @@ def push_asg_stats(session, asg, stack_name, nomad, consul, quiet):
 
     # now get the total number of jobs created
     # and show their total requested MemoryUtilization, CPU etc..
-    jobs_json = requests.get('%s/v1/jobs' % nomad, timeout=10).json()
+    try:
+        jobs_json = requests.get('%s/v1/jobs' % nomad, timeout=10).json()
+    except ValueError:
+        print "Could not get job list from nomad server %s/v1/jobs" % nomad
+        return False
 
     for job in jobs_json:
         # for each job, get the job definition
