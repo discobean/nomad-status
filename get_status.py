@@ -188,6 +188,12 @@ def push_asg_stats(session, asg, stack_name, nomad, consul, quiet):
         return False
 
     for job in jobs_json:
+        try:
+            if job['Stop'] == True:
+                continue
+        except:
+            pass
+
         # for each job, get the job definition
         job_json = requests.get('%s/v1/job/%s' % (nomad, job['ID'])).json()
 
@@ -416,3 +422,4 @@ if __name__ == '__main__':
             time.sleep(0.1)
         except (KeyboardInterrupt, SystemExit):
             sys.exit()
+
