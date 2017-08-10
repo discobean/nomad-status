@@ -102,6 +102,12 @@ def push_job_stats(session, stack_name, nomad, consul, quiet):
 
     # TODO, this should run in its own thread for each job
     for job in json:
+        try:
+            if job['Stop'] == True:
+                continue
+        except:
+            pass
+
         #print "Getting stats for Noamd Job ID: %s" % job['ID']
         allocations = requests.get('%s/v1/job/%s/allocations' % (nomad, job['ID']), timeout=10).json()
 
@@ -196,6 +202,21 @@ def push_asg_stats(session, asg, stack_name, nomad, consul, quiet):
 
         # for each job, get the job definition
         job_json = requests.get('%s/v1/job/%s' % (nomad, job['ID'])).json()
+
+        # But only find the tasks where the LTarget is "${meta.aws_stack_name}"
+        # and RTarget is the stack_name
+        found_stack_constraint = False
+        try:
+            for constraint in job_json['Constraints']:
+                if constraint['LTarget'] == '${meta.aws_stack_name}' and constraint['RTarget'] == stack_name:
+                    found_stack_constraint = True
+                    break
+        except:
+            pass
+
+        if not found_stack_constraint:
+            print 'Job %s does not have ${meta.aws_strack_name} constraint %s' % (job['ID'], stack_name)
+            continue
 
         # now calculate the total count of task groups, and the Memory/CPU usage
         # in each taskgroup
@@ -422,4 +443,3 @@ if __name__ == '__main__':
             time.sleep(0.1)
         except (KeyboardInterrupt, SystemExit):
             sys.exit()
-
