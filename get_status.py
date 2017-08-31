@@ -102,6 +102,12 @@ def push_job_stats(session, stack_name, nomad, consul, quiet):
 
     # TODO, this should run in its own thread for each job
     for job in json:
+        try:
+            if job['Stop'] == True:
+                continue
+        except:
+            pass
+
         #print "Getting stats for Noamd Job ID: %s" % job['ID']
         allocations = requests.get('%s/v1/job/%s/allocations' % (nomad, job['ID']), timeout=10).json()
         healthy_task_allocations = {}
