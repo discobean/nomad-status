@@ -102,14 +102,10 @@ def push_job_stats(session, stack_name, nomad, consul, quiet):
 
     # TODO, this should run in its own thread for each job
     for job in json:
-        try:
-            if job['Stop'] == True:
-                continue
-        except:
-            pass
-
         #print "Getting stats for Noamd Job ID: %s" % job['ID']
         allocations = requests.get('%s/v1/job/%s/allocations' % (nomad, job['ID']), timeout=10).json()
+        healthy_task_allocations = {}
+        unhealthy_task_allocations = {}
 
         # TODO, this should run in its own thread for each allocation
         for allocation in allocations:
@@ -117,6 +113,10 @@ def push_job_stats(session, stack_name, nomad, consul, quiet):
                 continue
 
             task_name = allocation['TaskGroup']
+            if not healthy_task_allocations.get(task_name):
+                healthy_task_allocations[task_name] = 0
+            if not unhealthy_task_allocations.get(task_name):
+                unhealthy_task_allocations[task_name] = 0
 
             # Now find out which node IP address this allocation is running on
             node = requests.get('%s/v1/node/%s' % (nomad, allocation['NodeID']), timeout=10).json()
@@ -135,6 +135,16 @@ def push_job_stats(session, stack_name, nomad, consul, quiet):
                 print "Job(%s-%d) %s::%s %s%% CPU" % (allocation['ID'], i, job['ID'], task_name, percent_cpu)
                 time.sleep(0.2)
 
+            if allocation['DeploymentStatus'].get('Healthy'):
+                healthy_task_allocations[task_name] += 1
+            else:
+                unhealthy_task_allocations[task_name] += 1
+
+        # Now push the healthy allocation count for each seperate task found as a total
+        for task_name, value in healthy_task_allocations.iteritems():
+            put_job_metric(cloudwatch, server_stack, stack_name, job['ID'], task_name, 'HealthyAllocations', value, 'Count')
+        for task_name, value in unhealthy_task_allocations.iteritems():
+            put_job_metric(cloudwatch, server_stack, stack_name, job['ID'], task_name, 'UnhealthyAllocations', value, 'Count')
 
 def push_asg_stats(session, asg, stack_name, nomad, consul, quiet):
     print "push_asg_stats(session, %s, %s, %s, %s, quiet)" % (asg, stack_name, nomad, consul)
