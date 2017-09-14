@@ -141,10 +141,14 @@ def push_job_stats(session, stack_name, nomad, consul, quiet):
                 print "Job(%s-%d) %s::%s %s%% CPU" % (allocation['ID'], i, job['ID'], task_name, percent_cpu)
                 time.sleep(0.2)
 
-            if allocation['DeploymentStatus'].get('Healthy'):
-                healthy_task_allocations[task_name] += 1
-            else:
-                unhealthy_task_allocations[task_name] += 1
+            try:
+                if allocation['DeploymentStatus'].get('Healthy'):
+                    healthy_task_allocations[task_name] += 1
+                else:
+                    unhealthy_task_allocations[task_name] += 1
+            except AttributeError:
+                print "!! Could not get deployment status of allocation task: %s" % task_name
+                traceback.print_exc(file=sys.stdout)
 
         # Now push the healthy allocation count for each seperate task found as a total
         for task_name, value in healthy_task_allocations.iteritems():
