@@ -179,7 +179,10 @@ def push_asg_stats(session, asg, stack_name, nomad, consul, quiet):
         try:
             json = requests.get('%s/v1/agent/self' % (node_nomad_url), timeout=10).json()
         except ValueError:
-            print "Could not get stats for self, node_id %s, skipping it" % node_id
+            print "Could not get stats for self, instance_ip %s, skipping it" % instance_ip
+            continue
+        except requests.exceptions.ConnectionError:
+            print "ConnectionError: Could not get stats for self, instance_ip %s, skipping it" % instance_ip
             continue
 
         node_id = json['stats']['client']['node_id']
