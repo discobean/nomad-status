@@ -25,16 +25,20 @@ def get_instance(ec2, instance_id):
         return instances[instance_id]
 
 
+outputs = {}
 def get_cf_outputs(session, stack_name):
-    # Get all the outputs for the stack
-    cloudformation = session.client('cloudformation')
-    response = cloudformation.describe_stacks(StackName=stack_name)
-    outputs = {}
-    for output in response['Stacks'][0]['Outputs']:
-        outputs[output['OutputKey']] = output['OutputValue']
+    try:
+        return outputs[stack_name]
+    except KeyError:
+        # Get all the outputs for the stack
+        cloudformation = session.client('cloudformation')
+        response = cloudformation.describe_stacks(StackName=stack_name)
+        outputs = {}
+        for output in response['Stacks'][0]['Outputs']:
+            outputs[output['OutputKey']] = output['OutputValue']
 
-    return outputs
-
+        outputs[stack_name] = outputs
+        return outputs
 
 def put_job_metric(cloudwatch, server_stack, stack_name, job_id, task_name, name, value, unit):
     # Jobs are recorded under the ASG stack name, and also under the server stack name
