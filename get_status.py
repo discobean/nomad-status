@@ -25,10 +25,10 @@ def get_instance(ec2, instance_id):
         return instances[instance_id]
 
 
-outputs = {}
+cached_outputs = {}
 def get_cf_outputs(session, stack_name):
     try:
-        return outputs[stack_name]
+        return cached_outputs[stack_name]
     except KeyError:
         # Get all the outputs for the stack
         cloudformation = session.client('cloudformation')
@@ -37,7 +37,7 @@ def get_cf_outputs(session, stack_name):
         for output in response['Stacks'][0]['Outputs']:
             outputs[output['OutputKey']] = output['OutputValue']
 
-        outputs[stack_name] = outputs
+        cached_outputs[stack_name] = outputs
         return outputs
 
 def put_job_metric(cloudwatch, server_stack, stack_name, job_id, task_name, name, value, unit):
