@@ -242,7 +242,7 @@ def push_asg_stats(session, asg, stack_name, nomad, consul, quiet):
             pass
 
         if not found_stack_constraint:
-            print 'Job %s does not have ${meta.aws_strack_name} constraint %s' % (job['ID'], stack_name)
+            print 'Job %s does not have ${meta.aws_stack_name} constraint %s' % (job['ID'], stack_name)
             continue
 
         # now calculate the total count of task groups, and the Memory/CPU usage
