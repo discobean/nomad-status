@@ -112,6 +112,24 @@ def push_job_stats(session, stack_name, nomad, consul, quiet):
         except:
             pass
 
+        # for each job, get the job definition
+        job_json = requests.get('%s/v1/job/%s' % (nomad, job['ID'])).json()
+
+        # But only find the tasks where the LTarget is "${meta.aws_stack_name}"
+        # and RTarget is the stack_name
+        found_stack_constraint = False
+        try:
+            for constraint in job_json['Constraints']:
+                if constraint['LTarget'] == '${meta.aws_stack_name}' and constraint['RTarget'] == stack_name:
+                    found_stack_constraint = True
+                    break
+        except:
+            pass
+
+        if not found_stack_constraint:
+            print 'Job %s does not have ${meta.aws_stack_name} constraint %s' % (job['ID'], stack_name)
+            continue
+
         #print "Getting stats for Noamd Job ID: %s" % job['ID']
         allocations = requests.get('%s/v1/job/%s/allocations' % (nomad, job['ID']), timeout=10).json()
         healthy_task_allocations = {}
